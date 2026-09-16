@@ -558,6 +558,10 @@ pub(super) struct ClientContextMenuOverlay {
 pub(super) struct ClientContextMenuItem {
     pub(super) label: &'static str,
     pub(super) action: ClientContextMenuAction,
+    /// The keyboard action this row duplicates, so the menu can print its key beside the
+    /// label. `None` means the row has no keyboard equivalent at all, which is different
+    /// from having one that the user has left unbound.
+    pub(super) keybind: Option<crate::input::KeybindAction>,
 }
 
 #[derive(Debug)]

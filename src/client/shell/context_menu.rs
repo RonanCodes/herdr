@@ -1,50 +1,85 @@
 use super::*;
 
 impl ClientContextMenuOverlay {
+    /// The rows of this menu, each paired with the keyboard action it duplicates.
+    ///
+    /// The third argument to `item` is that pairing, and this function is the only place it
+    /// is written down: the renderer asks the user's own configuration what key the action
+    /// carries and prints it beside the label, so a row is labelled correctly for whatever
+    /// the reader has bound without anything being repeated here.
+    ///
+    /// Adding a row therefore means deciding, once, whether it has a keyboard equivalent.
+    /// Pass `Some(..)` when the same action can be reached from the keyboard, and `None`
+    /// when it genuinely cannot, as with the group expand and collapse rows, which exist
+    /// only in the sidebar. `None` is a statement that no key exists, not a way to skip the
+    /// question; the test at the bottom of this file fails when a row is left undecided.
     pub(super) fn items(&self) -> Vec<ClientContextMenuItem> {
+        use crate::input::KeybindAction as Key;
         use ClientContextMenuAction as Action;
 
-        let item = |label, action| ClientContextMenuItem { label, action };
+        let item = |label, action, keybind| ClientContextMenuItem {
+            label,
+            action,
+            keybind,
+        };
         match &self.target {
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
-                vec![item("Rename", Action::Rename), item("Close", Action::Close)]
+                vec![
+                    item("Rename", Action::Rename, Some(Key::RenameWorkspace)),
+                    item("Close", Action::Close, Some(Key::CloseWorkspace)),
+                ]
             }
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
+                item("Rename", Action::Rename, Some(Key::RenameWorkspace)),
+                item("Close", Action::Close, Some(Key::CloseWorkspace)),
+                item("New worktree", Action::NewWorktree, Some(Key::NewWorktree)),
+                item(
+                    "Open worktree...",
+                    Action::OpenWorktree,
+                    Some(Key::OpenWorktree),
+                ),
             ],
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: true,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("Delete worktree checkout...", Action::RemoveWorktree),
+                item("Rename", Action::Rename, Some(Key::RenameWorkspace)),
+                item("Close", Action::Close, Some(Key::CloseWorkspace)),
+                item(
+                    "Delete worktree checkout...",
+                    Action::RemoveWorktree,
+                    Some(Key::RemoveWorktree),
+                ),
             ],
             ClientContextMenuTarget::Workspace {
                 has_worktree_children: true,
                 collapsed,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
-                item("Close group", Action::Close),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
+                item("Rename", Action::Rename, Some(Key::RenameWorkspace)),
+                item("Close group", Action::Close, Some(Key::CloseWorkspace)),
+                item("New worktree", Action::NewWorktree, Some(Key::NewWorktree)),
+                item(
+                    "Open worktree...",
+                    Action::OpenWorktree,
+                    Some(Key::OpenWorktree),
+                ),
+                // Expanding and collapsing a worktree group is a sidebar-only gesture with
+                // no action behind it, so there is no key to teach here.
                 item(
                     if *collapsed { "Expand" } else { "Collapse" },
                     Action::ToggleGroup,
+                    None,
                 ),
             ],
             ClientContextMenuTarget::Tab { .. } => vec![
-                item("New tab", Action::NewTab),
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
+                item("New tab", Action::NewTab, Some(Key::NewTab)),
+                item("Rename", Action::Rename, Some(Key::RenameTab)),
+                item("Close", Action::Close, Some(Key::CloseTab)),
             ],
             ClientContextMenuTarget::Pane {
                 source_pane_id,
@@ -52,17 +87,32 @@ impl ClientContextMenuOverlay {
                 right_click_passthrough,
                 ..
             } => {
-                let mut items = vec![item("Rename pane", Action::RenamePane)];
+                let mut items = vec![item(
+                    "Rename pane",
+                    Action::RenamePane,
+                    Some(Key::RenamePane),
+                )];
                 if *has_manual_label {
-                    items.push(item("Clear pane name", Action::ClearPaneName));
+                    // Clearing a manual pane name is only reachable from this menu; renaming
+                    // a pane to an empty string is not the same gesture.
+                    items.push(item("Clear pane name", Action::ClearPaneName, None));
                 }
                 if source_pane_id.is_some() {
-                    items.push(item("Swap with focused pane", Action::SwapWithFocusedPane));
+                    // The keyboard swaps in a direction, `SwapPaneLeft` and its siblings,
+                    // while this row swaps with whichever pane the mouse started from. No
+                    // single binding describes it.
+                    items.push(item(
+                        "Swap with focused pane",
+                        Action::SwapWithFocusedPane,
+                        None,
+                    ));
                 }
                 items.extend([
-                    item("Split right", Action::SplitRight),
-                    item("Split down", Action::SplitDown),
-                    item("Zoom", Action::Zoom),
+                    item("Split right", Action::SplitRight, Some(Key::SplitVertical)),
+                    item("Split down", Action::SplitDown, Some(Key::SplitHorizontal)),
+                    item("Zoom", Action::Zoom, Some(Key::Zoom)),
+                    // Right-click passthrough is a per-pane mouse preference with no action
+                    // behind it, so there is no key to show.
                     item(
                         if *right_click_passthrough {
                             "Use Herdr right-click menu"
@@ -70,8 +120,9 @@ impl ClientContextMenuOverlay {
                             "Send right-clicks to pane"
                         },
                         Action::ToggleRightClickPassthrough,
+                        None,
                     ),
-                    item("Close pane", Action::ClosePane),
+                    item("Close pane", Action::ClosePane, Some(Key::ClosePane)),
                 ]);
                 items
             }

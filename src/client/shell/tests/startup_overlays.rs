@@ -710,8 +710,11 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("● update ready"));
+    // Menu rows carry their key hint, so the panel is as wide as its widest label plus its
+    // widest hint rather than the widest label alone. This row is "update ready", which has
+    // no keyboard equivalent and therefore contributes no hint of its own.
     let update_row = state.hits.global_menu_rows[3].0;
-    assert_eq!(update_row.width, 16);
+    assert_eq!(update_row.width, 33);
     let menu_buffer = menu.to_ratatui_buffer().expect("menu buffer");
     assert_eq!(
         menu_buffer[(update_row.x + 1, update_row.y)].fg,

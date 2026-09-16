@@ -1,6 +1,6 @@
 use crossterm::event::KeyCode;
 
-use crate::config::{CustomCommandKeybind, Keybinds};
+use crate::config::{ActionKeybinds, CustomCommandKeybind, Keybinds};
 
 use super::TerminalKey;
 
@@ -89,12 +89,17 @@ pub(crate) fn resolve_prefix_binding(
     })
 }
 
-pub(crate) fn resolve_non_indexed_action(
+/// Every non-indexed action paired with the bindings currently configured for it.
+///
+/// This list is the single source of truth for both directions a binding is needed in.
+/// [`resolve_non_indexed_action`] walks it to turn a keypress into an action, and
+/// [`action_bindings`] walks it to turn an action back into the key text shown beside the
+/// matching menu item. An entry added here is therefore reachable from the keyboard and
+/// labelled in the menus at the same time, because there is no second list to forget.
+pub(crate) fn non_indexed_action_bindings(
     keybinds: &Keybinds,
-    key: &TerminalKey,
-    dispatch: KeybindDispatch,
-) -> Option<KeybindAction> {
-    for (bindings, action) in [
+) -> impl Iterator<Item = (&ActionKeybinds, KeybindAction)> {
+    [
         (&keybinds.help, KeybindAction::Help),
         (&keybinds.settings, KeybindAction::Settings),
         (&keybinds.workspace_picker, KeybindAction::WorkspacePicker),
@@ -152,12 +157,35 @@ pub(crate) fn resolve_non_indexed_action(
         ),
         (&keybinds.detach, KeybindAction::Detach),
         (&keybinds.goto, KeybindAction::OpenNavigator),
-    ] {
+    ]
+    .into_iter()
+}
+
+pub(crate) fn resolve_non_indexed_action(
+    keybinds: &Keybinds,
+    key: &TerminalKey,
+    dispatch: KeybindDispatch,
+) -> Option<KeybindAction> {
+    for (bindings, action) in non_indexed_action_bindings(keybinds) {
         if action_matches(bindings, key, dispatch) {
             return Some(action);
         }
     }
     None
+}
+
+/// The bindings configured for `action`, when it is one of the non-indexed actions.
+///
+/// Returns `None` for an action that is not in that list at all, such as the indexed
+/// `SwitchTab(n)` family, whose key text no menu needs. An action that is listed but has
+/// been left unbound yields bindings with no entries, which callers render as no key text
+/// rather than as the word "unset": a menu is not a configuration audit.
+pub(crate) fn action_bindings(
+    keybinds: &Keybinds,
+    action: KeybindAction,
+) -> Option<&ActionKeybinds> {
+    non_indexed_action_bindings(keybinds)
+        .find_map(|(bindings, candidate)| (candidate == action).then_some(bindings))
 }
 
 pub(crate) fn resolve_custom_command(

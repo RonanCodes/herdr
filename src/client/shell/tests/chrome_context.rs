@@ -523,3 +523,104 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
             if params.workspace_id == "ws_1" && params.close_group
     ));
 }
+
+/// Renders `menu` on its own and returns one string per drawn row.
+fn context_menu_rows(state: &ClientShellState, menu: &ClientContextMenuOverlay) -> Vec<String> {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 60, 12));
+    let rendered = render::render_context_menu(
+        &mut buffer,
+        menu,
+        &state.config.keybinds,
+        &state.config.palette,
+    )
+    .expect("context menu should render");
+    rendered
+        .menu_rows
+        .iter()
+        .map(|(row, _)| {
+            (row.x..row.right())
+                .map(|x| buffer[(x, row.y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn context_menu_prints_the_readers_own_key_beside_each_row() {
+    // The hint is read from the live keybinding configuration while the menu is drawn, so
+    // this covers rebinding as well as the default keymap: a reader who moved the prefix to
+    // ctrl+a is taught ctrl+a, and one who unbound an action is taught nothing for it.
+    let config: Config = toml::from_str(
+        r#"
+[keys]
+prefix = "ctrl+a"
+rename_workspace = "prefix+shift+w"
+new_worktree = "prefix+shift+g"
+close_workspace = ""
+"#,
+    )
+    .expect("test config should parse");
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+
+    let rows = context_menu_rows(
+        &state,
+        &ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Workspace {
+                workspace_id: "ws_1".to_owned(),
+                is_git: true,
+                is_linked_worktree: false,
+                has_worktree_children: false,
+                collapsed: false,
+            },
+            x: 0,
+            y: 0,
+            highlighted: 0,
+        },
+    );
+
+    // A prefix binding is written the way it is typed rather than the way it is configured:
+    // "prefix+shift+w" in the file becomes the two keystrokes the reader performs.
+    assert!(
+        rows[0].contains("Rename") && rows[0].contains("ctrl+a shift+w"),
+        "{rows:?}"
+    );
+    // An action the reader has deliberately unbound shows its label and nothing else.
+    assert!(
+        rows[1].contains("Close") && !rows[1].contains("ctrl+a"),
+        "{rows:?}"
+    );
+    assert!(
+        rows[2].contains("New worktree") && rows[2].contains("ctrl+a shift+g"),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn context_menu_rows_without_a_keyboard_equivalent_show_no_key() {
+    // Collapsing a worktree group is a sidebar-only gesture. The row is deliberately mapped
+    // to no action, and the menu must not invent one for it.
+    let state = {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state
+    };
+    let rows = context_menu_rows(
+        &state,
+        &ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Workspace {
+                workspace_id: "ws_1".to_owned(),
+                is_git: true,
+                is_linked_worktree: false,
+                has_worktree_children: true,
+                collapsed: false,
+            },
+            x: 0,
+            y: 0,
+            highlighted: 0,
+        },
+    );
+    let collapse = rows.last().expect("group menu should have rows");
+    assert!(collapse.contains("Collapse"), "{rows:?}");
+    assert_eq!(collapse.trim(), "Collapse", "{rows:?}");
+}
