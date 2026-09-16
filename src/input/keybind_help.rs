@@ -7,6 +7,8 @@ use crate::{
     input::TerminalKey,
 };
 
+use super::keybindings::{action_bindings, KeybindAction};
+
 pub(crate) type KeybindHelpEntry = (String, Cow<'static, str>);
 pub(crate) type KeybindHelpGroup = (&'static str, Vec<KeybindHelpEntry>);
 
@@ -21,6 +23,40 @@ pub(crate) fn keybind_help_text_char(key: &TerminalKey) -> Option<char> {
         return None;
     };
     Some(character)
+}
+
+/// The key text shown beside a menu item, written the way it is typed rather than the way
+/// it is configured.
+///
+/// A prefix binding is stored as `prefix+c`, because that is what `config.toml` says, but
+/// nobody presses a key called "prefix". With the default prefix the fingers do `ctrl+b`
+/// and then `c`, so that is what the menu prints: this hint exists to be copied by hand,
+/// not pasted into a file. The keybind help screen keeps the config spelling, because there
+/// the reader is editing the configuration rather than learning the keyboard.
+///
+/// Only the first configured binding is shown. An action may carry several and the help
+/// screen lists them all, but a menu row is a single line beside its label, and a list of
+/// alternatives there reads as noise rather than as a lesson.
+///
+/// Returns `None` when the action carries no binding, so that the row shows its label and
+/// nothing else. Printing "unset" here would turn every menu into a configuration audit.
+pub(crate) fn menu_keybind_hint(
+    keybinds: &Keybinds,
+    prefix: (KeyCode, KeyModifiers),
+    action: KeybindAction,
+) -> Option<String> {
+    let binding = action_bindings(keybinds, action)?.bindings.first()?;
+    if !binding.trigger.is_prefix() {
+        return Some(binding.label.clone());
+    }
+    Some(format!(
+        "{} {}",
+        crate::config::format_key_combo(prefix),
+        binding
+            .label
+            .strip_prefix("prefix+")
+            .unwrap_or(binding.label.as_str())
+    ))
 }
 
 fn entry(key: impl Into<String>, label: &'static str) -> KeybindHelpEntry {
@@ -253,6 +289,38 @@ mod tests {
                 vec![entry("v", "split vertical"), entry("x", "close pane")],
             ),
         ]
+    }
+
+    fn live(config_toml: &str) -> crate::config::LiveKeybindConfig {
+        let config: crate::config::Config =
+            toml::from_str(config_toml).expect("test config should parse");
+        config
+            .live_keybinds_with_diagnostics()
+            .expect("test config should resolve")
+            .0
+    }
+
+    #[test]
+    fn menu_hint_shows_a_direct_binding_exactly_as_it_is_pressed() {
+        // A direct chord needs no prefix, so it is printed as configured. Prepending the
+        // prefix here would teach a keystroke that does nothing.
+        let live = live("[keys]\nzoom = \"ctrl+alt+z\"\n");
+        assert_eq!(
+            menu_keybind_hint(&live.keybinds, live.prefix, KeybindAction::Zoom),
+            Some("ctrl+alt+z".to_owned())
+        );
+    }
+
+    #[test]
+    fn menu_hint_is_absent_for_an_indexed_action() {
+        // Indexed actions such as "switch to tab 3" are deliberately outside the shared
+        // action table, and no menu row maps to one. Asking for a hint yields nothing
+        // rather than a wrong answer.
+        let live = live("[keys]\n");
+        assert_eq!(
+            menu_keybind_hint(&live.keybinds, live.prefix, KeybindAction::SwitchTab(2)),
+            None
+        );
     }
 
     #[test]

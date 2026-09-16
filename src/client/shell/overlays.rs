@@ -81,14 +81,94 @@ pub(crate) fn render_client_overlay(
     }
 }
 
+/// Minimum blank columns between a menu label and its key hint.
+///
+/// Without a gap a long label and a short key run together and read as one string. Menus
+/// are widened to the widest label plus the widest hint, so every hint in a menu starts in
+/// the same column and the eye can run straight down them, as it does in a desktop menu.
+const MENU_HINT_GAP: u16 = 3;
+
+/// The key text for a menu row, or `None` when the row has no keyboard equivalent.
+///
+/// Read from the live keybinding configuration on every render rather than stored on the
+/// row, so a rebind or a `reload config` is reflected the next time the menu is opened,
+/// with nothing to invalidate.
+fn menu_row_hint(
+    keybinds: &LiveKeybindConfig,
+    action: Option<crate::input::KeybindAction>,
+) -> Option<String> {
+    crate::input::menu_keybind_hint(&keybinds.keybinds, keybinds.prefix, action?)
+}
+
+/// The width a menu must add to its widest label to fit every hint in one column.
+fn menu_hint_column_width(hints: &[Option<String>]) -> u16 {
+    let widest = hints
+        .iter()
+        .flatten()
+        .map(|hint| display_width(hint))
+        .max()
+        .unwrap_or(0);
+    if widest == 0 {
+        0
+    } else {
+        widest.saturating_add(MENU_HINT_GAP)
+    }
+}
+
+/// Draws `hint` right-aligned in `row`, leaving one column against the panel border.
+///
+/// Does nothing when the hint would collide with the label, which is what happens when the
+/// menu has been clamped to a narrow screen. Losing the hint there is correct: the label
+/// says what the row does, and the hint only says how else to reach it.
+fn put_menu_hint(
+    buffer: &mut Buffer,
+    row: Rect,
+    label_width: u16,
+    hint: &str,
+    highlighted: bool,
+    row_style: Style,
+    palette: &Palette,
+) {
+    let hint_width = display_width(hint);
+    let hint_x = row.right().saturating_sub(hint_width).saturating_sub(1);
+    if hint_x <= row.x.saturating_add(label_width) {
+        return;
+    }
+    let style = if highlighted {
+        row_style
+    } else {
+        Style::default().fg(palette.subtext0).bg(palette.panel_bg)
+    };
+    put_text(
+        buffer,
+        hint_x,
+        row.y,
+        row.right().saturating_sub(hint_x),
+        hint,
+        style,
+    );
+}
+
 pub(crate) fn render_global_menu(
     buffer: &mut Buffer,
     launcher: Rect,
     menu: &ClientGlobalMenuOverlay,
     snapshot: &ClientShellSnapshot,
+    keybinds: &LiveKeybindConfig,
     palette: &Palette,
 ) -> Option<OverlayRender> {
     let items = super::super::global_menu::global_menu_items(snapshot);
+    // Every row here except "what's new" is a keybound action already, so the hints come
+    // from the same lookup the right-click menus use.
+    let hints: Vec<Option<String>> = items
+        .iter()
+        .map(|(_, action)| match action {
+            super::super::global_menu::ClientGlobalMenuAction::Binding(binding) => {
+                menu_row_hint(keybinds, Some(*binding))
+            }
+            super::super::global_menu::ClientGlobalMenuAction::WhatsNew => None,
+        })
+        .collect();
     let screen = buffer.area;
     let width = items
         .iter()
@@ -100,6 +180,7 @@ pub(crate) fn render_global_menu(
         })
         .max()
         .unwrap_or(8)
+        .saturating_add(menu_hint_column_width(&hints))
         .saturating_add(4)
         .min(screen.width.max(1));
     let height = (items.len() as u16)
@@ -151,6 +232,14 @@ pub(crate) fn render_global_menu(
         } else {
             put_text(buffer, row.x, row.y, row.width, &format!(" {label}"), style);
         }
+        if let Some(hint) = hints[index].as_deref() {
+            // The label is drawn with a leading space, and a badge shifts it two further,
+            // so the collision guard has to measure the same way.
+            let label_width = display_width(label)
+                .saturating_add(1)
+                .saturating_add(if has_badge { 2 } else { 0 });
+            put_menu_hint(buffer, row, label_width, hint, highlighted, style, palette);
+        }
         rows.push((row, index));
     }
     Some(OverlayRender {
@@ -163,9 +252,16 @@ pub(crate) fn render_global_menu(
 pub(crate) fn render_context_menu(
     buffer: &mut Buffer,
     menu: &ClientContextMenuOverlay,
+    keybinds: &LiveKeybindConfig,
     palette: &Palette,
 ) -> Option<OverlayRender> {
     let items = menu.items();
+    // Resolved for the whole menu before anything is drawn, because the panel has to be
+    // wide enough for the longest hint before the first row is placed.
+    let hints: Vec<Option<String>> = items
+        .iter()
+        .map(|item| menu_row_hint(keybinds, item.keybind))
+        .collect();
     let screen = buffer.area;
     let max_item_width = items
         .iter()
@@ -173,6 +269,7 @@ pub(crate) fn render_context_menu(
         .max()
         .unwrap_or(0);
     let width = max_item_width
+        .saturating_add(menu_hint_column_width(&hints))
         .saturating_add(4)
         .max(14)
         .min(screen.width.max(1));
@@ -207,6 +304,17 @@ pub(crate) fn render_context_menu(
         };
         buffer.set_style(row, style);
         put_text(buffer, row.x, row.y, row.width, item.label, style);
+        if let Some(hint) = hints[index].as_deref() {
+            put_menu_hint(
+                buffer,
+                row,
+                display_width(item.label),
+                hint,
+                highlighted,
+                style,
+                palette,
+            );
+        }
         rows.push((row, index));
     }
     Some(OverlayRender {
