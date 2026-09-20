@@ -624,3 +624,49 @@ fn context_menu_rows_without_a_keyboard_equivalent_show_no_key() {
     assert!(collapse.contains("Collapse"), "{rows:?}");
     assert_eq!(collapse.trim(), "Collapse", "{rows:?}");
 }
+
+#[test]
+fn renaming_a_workspace_edits_at_the_cursor_rather_than_only_at_the_end() {
+    // A rename prompt opens with the cursor at the end of the existing name. Reaching the
+    // start should be a matter of moving the cursor, not of deleting everything on the way
+    // there, so this drives the real key path: the same raw events a keyboard produces,
+    // through route_overlay_key and into the overlay's editor.
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.open_rename_workspace_overlay();
+
+    let press = |state: &mut ClientShellState, code, modifiers| {
+        state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            code, modifiers,
+        ))]);
+    };
+    let text = |state: &ClientShellState| match state.overlay.as_ref() {
+        Some(ClientShellOverlay::Rename(rename)) => rename.input.as_str().to_owned(),
+        _ => panic!("rename overlay should be open"),
+    };
+
+    let original = text(&state);
+    assert!(!original.is_empty(), "test fixture needs a named workspace");
+
+    // Home, then type: the insertion must land at the front and keep the rest intact.
+    press(&mut state, KeyCode::Home, KeyModifiers::empty());
+    press(&mut state, KeyCode::Char('x'), KeyModifiers::empty());
+    assert_eq!(text(&state), format!("x{original}"), "Home then type");
+
+    // ctrl+a is the same movement for anyone with readline fingers.
+    press(&mut state, KeyCode::End, KeyModifiers::empty());
+    press(&mut state, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    press(&mut state, KeyCode::Char('y'), KeyModifiers::empty());
+    assert_eq!(text(&state), format!("yx{original}"), "ctrl+a then type");
+
+    // Left moves one character at a time and Backspace deletes at the cursor, not the end.
+    press(&mut state, KeyCode::End, KeyModifiers::empty());
+    press(&mut state, KeyCode::Left, KeyModifiers::empty());
+    press(&mut state, KeyCode::Backspace, KeyModifiers::empty());
+    let expected = {
+        let mut chars: Vec<char> = format!("yx{original}").chars().collect();
+        chars.remove(chars.len() - 2);
+        chars.into_iter().collect::<String>()
+    };
+    assert_eq!(text(&state), expected, "Left then Backspace");
+}
